@@ -19,24 +19,6 @@ var configFile, databaseURL string
 var debug bool
 var step int
 
-type Contract struct {
-	Hash                 string
-	CreatorAddress       string
-	ContractAddress      string
-	CreationCode         string
-	SourceCode           string
-	ContractFile         string
-	ContractName         string
-	CompilerVersion      string
-	CompilerType         string
-	SolcVersion          string
-	EvmVersion           string
-	Optimization         string
-	Runs                 string
-	ABI                  string
-	ConstructorArguments string
-}
-
 func main() {
 	cobra.OnInitialize(initConfig)
 	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "", "config file (default is config/local.yaml)")
@@ -95,10 +77,17 @@ var rootCmd = &cobra.Command{
 			if err != nil {
 				panic(err)
 			}
-			i++
 			if gapCount < step {
-				fmt.Printf("GapCount(%v:%v) - %v\n", step*i, step*(i+1), gapCount)
+				err, gapDetails := getGapDetails(pgpool, i)
+				if err != nil {
+					panic(err)
+				}
+				if len(gapDetails) > 100 {
+					gapDetails = gapDetails[:100]
+				}
+				fmt.Printf("GapCount(%v:%v) - %v(%s)\n", step*i, step*(i+1), gapCount, gapDetails)
 			}
+			i++
 			if i*10000 > head {
 				os.Exit(0)
 			}
@@ -126,4 +115,20 @@ func getHead(pgpool *pgxpool.Pool) (error, int) {
 	var block int
 	err := pgpool.QueryRow(context.Background(), "SELECT MAX(blocks.number) FROM blocks LIMIT 1").Scan(&block)
 	return err, block
+}
+
+func getGapDetails(pgpool *pgxpool.Pool, page int) (error, string) {
+	selectSql := fmt.Sprintf(`
+	SELECT string_agg(all_ids::text, ', ') FROM 
+	(
+	SELECT all_ids 
+	FROM generate_series(%v::integer, %v-1::integer) all_ids
+	EXCEPT 
+	SELECT blocks.number FROM blocks WHERE blocks.number >= (%v) AND blocks.number < (%v)
+	ORDER BY all_ids
+	) as s`, step*page, step*(page+1), step*page, step*(page+1))
+
+	var details string
+	err := pgpool.QueryRow(context.Background(), selectSql).Scan(&details)
+	return err, details
 }
